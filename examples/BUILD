@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
-load("@protobuf//bazel:proto_library.bzl", "proto_library")
-load("@protobuf//bazel:py_proto_library.bzl", "py_proto_library")
+
 
 package(
         default_visibility = ["//visibility:public"],
@@ -28,6 +26,19 @@ cc_binary(
     deps = [
         "//in_memory:status_macros",
         "//in_memory/clustering:config_cc_proto",
+        "//in_memory/clustering:graph",
+        "//in_memory/clustering/hac:parhac",
+        "@abseil-cpp//absl/status",
+    ],
+)
+
+cc_binary(
+    name = "classicgraph_parhac",
+    srcs = ["classicgraph_parhac.cc"],
+    deps = [
+        "//in_memory:status_macros",
+        "//in_memory/clustering:config_cc_proto",
+        "//in_memory/clustering:dendrogram",
         "//in_memory/clustering:graph",
         "//in_memory/clustering/hac:parhac",
         "@abseil-cpp//absl/status",
