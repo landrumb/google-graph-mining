@@ -10,6 +10,7 @@
 #include <limits>
 #include <string>
 #include <vector>
+#include <cstring>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -28,8 +29,8 @@ using graph_mining::in_memory::CopyGraph;
 
 namespace {
 
-absl::StatusOr<SimpleUndirectedGraph> ReadClassicGraphAsUndirectedUnitWeights(
-    const std::string& path) {
+absl::Status ReadClassicGraphAutoWeights(
+    const std::string& path, SimpleUndirectedGraph* g) {
   std::ifstream in(path, std::ios::binary);
   if (!in) {
     return absl::NotFoundError("Failed to open input file: " + path);
@@ -58,19 +59,71 @@ absl::StatusOr<SimpleUndirectedGraph> ReadClassicGraphAsUndirectedUnitWeights(
     }
   }
 
-  SimpleUndirectedGraph g;
-  // Edges are written per node in order; read sequentially.
+  // Compute number of edges to detect whether weights are present.
+  uint64_t total_edges = 0;
+  for (uint32_t i = 0; i < n; ++i) total_edges += degrees[i];
+
+  // Determine file size to see if weights are appended.
+  std::streampos pos_after_header_and_degrees = in.tellg();
+  in.seekg(0, std::ios::end);
+  std::streampos file_size = in.tellg();
+  in.seekg(pos_after_header_and_degrees);
+
+  const uint64_t bytes_for_edges = total_edges * 4ULL;
+  const uint64_t bytes_for_weights = total_edges * 4ULL;
+  const uint64_t remaining_bytes = static_cast<uint64_t>(file_size - pos_after_header_and_degrees);
+
+  const bool has_weights = remaining_bytes >= (bytes_for_edges + bytes_for_weights);
+
+  if (!has_weights) {
+    // Edges are written per node in order; read sequentially with unit weights.
+    for (uint32_t i = 0; i < n; ++i) {
+      uint32_t deg = degrees[i];
+      for (uint32_t j = 0; j < deg; ++j) {
+        uint32_t nbr = 0;
+        if (!read_u32(nbr)) {
+          return absl::InvalidArgumentError("Failed reading neighbor list");
+        }
+        RETURN_IF_ERROR(g->AddEdge(static_cast<int64_t>(i),
+                                   static_cast<int64_t>(nbr), 1.0));
+      }
+    }
+    return absl::OkStatus();
+  }
+
+  // Weighted: read all edges, then all weights, then add edges with weights in order.
+  std::vector<uint32_t> edges;
+  edges.resize(static_cast<size_t>(total_edges));
+  // Read all edge indices
+  for (uint64_t e = 0; e < total_edges; ++e) {
+    if (!read_u32(edges[static_cast<size_t>(e)])) {
+      return absl::InvalidArgumentError("Failed reading edges block");
+    }
+  }
+
+  // Read all weights as raw little-endian u32 then bit-cast to float
+  std::vector<float> weights;
+  weights.resize(static_cast<size_t>(total_edges));
+  for (uint64_t e = 0; e < total_edges; ++e) {
+    uint32_t bits = 0;
+    if (!read_u32(bits)) {
+      return absl::InvalidArgumentError("Failed reading weights block");
+    }
+    float f;
+    static_assert(sizeof(float) == sizeof(uint32_t), "float must be 32-bit");
+    std::memcpy(&f, &bits, sizeof(float));
+    weights[static_cast<size_t>(e)] = f;
+  }
+
+  // Distribute edges and weights per node in the same traversal order.
+  uint64_t offset = 0;
   for (uint32_t i = 0; i < n; ++i) {
     uint32_t deg = degrees[i];
-    for (uint32_t j = 0; j < deg; ++j) {
-      uint32_t nbr = 0;
-      if (!read_u32(nbr)) {
-        return absl::InvalidArgumentError("Failed reading neighbor list");
-      }
-      // Unit weight and undirected: SimpleUndirectedGraph ensures symmetry and
-      // avoids duplicate parallel edges via map overwrite.
-      RETURN_IF_ERROR(g.AddEdge(static_cast<int64_t>(i),
-                                static_cast<int64_t>(nbr), 1.0));
+    for (uint32_t j = 0; j < deg; ++j, ++offset) {
+      uint32_t nbr = edges[static_cast<size_t>(offset)];
+      double w = static_cast<double>(weights[static_cast<size_t>(offset)]);
+      RETURN_IF_ERROR(g->AddEdge(static_cast<int64_t>(i),
+                                 static_cast<int64_t>(nbr), w));
     }
   }
 
@@ -114,9 +167,10 @@ int main(int argc, char** argv) {
     epsilon = std::stod(argv[4]);
   }
 
-  auto g_or = ReadClassicGraphAsUndirectedUnitWeights(input_path);
-  if (!g_or.ok()) {
-    std::cerr << "Error reading ClassicGraph: " << g_or.status() << "\n";
+  SimpleUndirectedGraph input_graph;
+  absl::Status read_st = ReadClassicGraphAutoWeights(input_path, &input_graph);
+  if (!read_st.ok()) {
+    std::cerr << "Error reading ClassicGraph: " << read_st << "\n";
     return 1;
   }
   SimpleUndirectedGraph input_graph = std::move(g_or).value();
