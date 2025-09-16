@@ -127,7 +127,7 @@ absl::Status ReadClassicGraphAutoWeights(
     }
   }
 
-  return g;
+  return absl::OkStatus();
 }
 
 absl::Status WriteDendrogramCsv(const Dendrogram& dendro,
@@ -173,7 +173,6 @@ int main(int argc, char** argv) {
     std::cerr << "Error reading ClassicGraph: " << read_st << "\n";
     return 1;
   }
-  SimpleUndirectedGraph input_graph = std::move(g_or).value();
 
   ParHacClusterer clusterer;
   absl::Status st = CopyGraph(input_graph, clusterer.MutableGraph());
@@ -202,5 +201,3 @@ int main(int argc, char** argv) {
 
   return 0;
 }
-
-
